@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AR — WebXR veya Marker Fallback</title>
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<!-- Fallback için AR.js -->
+<script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.5/aframe/build/aframe-ar.min.js"></script>
+<style>body{margin:0;font-family:system-ui,Arial} #ui{position:fixed;inset:auto 0 0 0;display:flex;gap:8px;justify-content:center;background:#111827cc;color:#e5e7eb;padding:10px} button{border:0;border-radius:10px;padding:8px 14px} .ok{background:#16a34a;color:#fff}</style>
+</head>
+<body>
+<div id="ui">
+  <span id="status">Hazır…</span>
+  <button id="start" class="ok">AR'ı Başlat</button>
+</div>
+
+<!-- WebXR sahnesi (hit-test) -->
+<a-scene id="webxr" xr-mode="ar" webxr="optionalFeatures: hit-test,light-estimation"
+         vr-mode-ui="enabled:false" embedded style="display:none">
+  <a-entity id="reticle" visible="false" geometry="primitive:ring;radiusInner:.045;radiusOuter:.05"
+            rotation="-90 0 0" material="color:#38bdf8"></a-entity>
+  <a-entity id="obj" visible="false" scale="0.2 0.2 0.2">
+    <a-torus-knot radius="0.2" radius-tubular="0.05" material="color:#f59e0b"></a-torus-knot>
+  </a-entity>
+  <a-camera></a-camera>
+</a-scene>
+
+<!-- Marker fallback sahne (hiro marker) -->
+<a-scene id="marker" embedded vr-mode-ui="enabled:false" style="display:none"
+         arjs="sourceType: webcam; debugUIEnabled: false;">
+  <a-marker preset="hiro">
+    <a-box position="0 0.5 0" material="color:#38bdf8"></a-box>
+  </a-marker>
+  <a-entity camera></a-entity>
+</a-scene>
+
+<script>
+const $ = id => document.getElementById(id);
+const status = $('status'), startBtn = $('start');
+const webxr = $('webxr'), marker = $('marker');
+const reticle = $('reticle'), obj = $('obj');
+let hitTestSource=null, refSpace=null, lastPose=null;
+
+async function canUseWebXR() {
+  if (!('xr' in navigator)) return false;
+  try { return await navigator.xr.isSessionSupported('immersive-ar'); }
+  catch { return false; }
+}
+
+startBtn.onclick = async () => {
+  // Önce WebXR deneyelim
+  if (await canUseWebXR()) {
+    status.textContent = 'WebXR AR başlatılıyor… Kamera izni verin.';
+    webxr.style.display = 'block'; marker.style.display = 'none';
+    await webxr.enterVR(); // kullanıcı etkileşimi içinde
+  } else {
+    status.textContent = 'WebXR yok. Marker fallback açılıyor (hiro).';
+    marker.style.display = 'block'; webxr.style.display = 'none';
+  }
+};
+
+// WebXR başlarsa: güvenli sıralama
+webxr.addEventListener('renderstart', () => {
+  const r = webxr.renderer;
+  r.xr.addEventListener('sessionstart', async () => {
+    status.textContent = 'Yüzey arıyorum…';
+    const session = r.xr.getSession();
+    const viewer = await session.requestReferenceSpace('viewer');
+    refSpace = await r.xr.getReferenceSpace();
+    hitTestSource = await session.requestHitTestSource({ space: viewer });
+
+    // Tek dokunuşla yerleştir
+    webxr.canvas.addEventListener('click', () => {
+      if (!lastPose) return;
+      obj.object3D.position.copy(reticle.object3D.position);
+      obj.object3D.quaternion.copy(reticle.object3D.quaternion);
+      obj.setAttribute('visible', true);
+    });
+
+    r.setAnimationLoop(()=>{
+      const frame = r.xr.getFrame();
+      if (!frame || !hitTestSource) return;
+      const hits = frame.getHitTestResults(hitTestSource);
+      if (!hits.length) { reticle.setAttribute('visible', false); return; }
+      const pose = hits[0].getPose(refSpace); lastPose = pose;
+      const p = pose.transform.position, q = pose.transform.orientation;
+      reticle.object3D.position.set(p.x,p.y,p.z);
+      reticle.object3D.quaternion.set(q.x,q.y,q.z,q.w);
+      reticle.setAttribute('visible', true);
+      status.textContent = 'Yüzey bulundu. Dokunarak yerleştir.';
+    });
+  });
+});
+</script>
+</body>
+</html>
